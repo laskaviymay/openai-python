@@ -1,4 +1,21 @@
+"""Forward news posts from subscribed Telegram channels to a chat.
+
+The script runs using a personal account and listens to all new posts on
+channels you are subscribed to. When a post contains any of the defined
+keywords, it is forwarded to ``TARGET_CHAT``. Reposts are forwarded too but
+duplicates are skipped.
+
+Usage::
+
+    python examples/telegram_forwarder.py
+
+You will be asked to sign in on the first run and a ``forwarder.session`` file
+will be created to persist your login.
+"""
+
 import asyncio
+from typing import Set, Tuple
+
 from telethon import TelegramClient, events
 
 # Replace with your own API credentials
@@ -66,13 +83,34 @@ async def main() -> None:
     # Create the client and connect. The session will be stored in 'forwarder.session'.
     client = TelegramClient('forwarder', API_ID, API_HASH)
 
+    processed: Set[Tuple[int, int]] = set()
+
     @client.on(events.NewMessage)
     async def handler(event: events.NewMessage.Event) -> None:
-        """Forward messages containing the keywords."""
+        """Forward channel posts containing the keywords."""
+        # Only consider posts from broadcast channels (not groups or comments)
+        if not event.is_channel or event.is_group:
+            return
+
         text = event.raw_text.lower()
-        if any(keyword in text for keyword in KEYWORDS):
-            await event.forward_to(TARGET_CHAT)
-            print(f"Forwarded message from {event.chat_id}")
+        if not any(keyword in text for keyword in KEYWORDS):
+            return
+
+        if event.message.forward:
+            # Use original post information to avoid duplicates from reposts
+            unique_id = (
+                event.message.forward.chat_id,
+                event.message.forward.channel_post,
+            )
+        else:
+            unique_id = (event.chat_id, event.id)
+
+        if unique_id in processed:
+            return
+        processed.add(unique_id)
+
+        await event.message.forward_to(TARGET_CHAT)
+        print(f"Forwarded message {unique_id}")
 
     async with client:
         print("Forwarder is running. Press Ctrl+C to stop.")
